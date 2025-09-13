@@ -1,0 +1,125 @@
+/* TodayPunchesPrint.css */
+
+/* Container */
+.attendance-container {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background-color: #f9fafb;
+  padding: 2rem;
+  font-family: 'Arial', sans-serif;
+}
+
+/* Card */
+.attendance-card {
+  width: 100%;
+  max-width: 1200px;
+  background-color: #fff;
+  border: 3px solid #1f2937; /* thick outer border */
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+}
+
+/* Header */
+.attendance-card h1 {
+  text-align: center;
+  margin-bottom: 1rem;
+  font-size: 2rem;
+  font-weight: bold;
+  color: #111827;
+}
+
+/* Search bar */
+.search-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+.search-bar input {
+  padding: 0.5rem 1rem;
+  border: 1px solid #6b7280;
+  border-radius: 0.3rem;
+  outline: none;
+  transition: 0.3s;
+}
+
+.search-bar input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 5px rgba(37, 99, 235, 0.5);
+}
+
+/* Table */
+.attendance-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 2px solid #1f2937; /* outer border */
+  table-layout: fixed;
+}
+
+/* Header row */
+.attendance-table th {
+  border: 1px solid #1f2937;
+  background-color: #2563eb;
+  color: #fff;
+  padding: 0.75rem;
+  font-weight: bold;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+/* Table cells */
+.attendance-table td {
+  border: 1px solid #1f2937;
+  padding: 0.6rem;
+  text-align: center;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+/* Alternating rows */
+.attendance-table tbody tr:nth-child(even) {
+  background-color: #f3f4f6;
+}
+
+.attendance-table tbody tr:hover {
+  background-color: #e0f2fe;
+  transition: 0.3s;
+}
+
+/* In/Out colors */
+.in-time {
+  color: #16a34a;
+  font-weight: bold;
+}
+
+.out-time {
+  color: #dc2626;
+  font-weight: bold;
+}
+
+/* Empty state */
+.no-data {
+  text-align: center;
+  font-style: italic;
+  color: #6b7280;
+  padding: 1.5rem 0;
+}
+
+/* Responsive for small screens */
+@media print {
+  body {
+    background-color: #fff;
+  }
+  .attendance-container {
+    padding: 0;
+    justify-content: center;
+  }
+  .attendance-card {
+    box-shadow: none;
+    border: 2px solid #000;
+    border-radius: 0;
+  }
+}
