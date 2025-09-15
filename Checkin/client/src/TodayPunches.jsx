@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+
 import "./TodayPunches.css";
 
 export default function TodayPunches() {
@@ -11,7 +14,7 @@ export default function TodayPunches() {
   const [showLogin, setShowLogin] = useState(false);
   const [message, setMessage] = useState("");
 
-  useEffect(() => {
+useEffect(() => {
   const fetchPunches = () => {
     fetch("http://localhost:5000/api/today-punches")
       .then((res) => res.json())
@@ -21,8 +24,13 @@ export default function TodayPunches() {
           (p) => String(p.EmployeeId) !== "1" && String(p.EmployeeId) !== "2"
         );
 
-        setPunches(filtered);
-        setFilteredPunches(filtered);
+        // 🔤 sort alphabetically by EmployeeName
+        const sorted = filtered.sort((a, b) =>
+          (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
+        );
+
+        setPunches(sorted);
+        setFilteredPunches(sorted);
         setLoading(false);
       })
       .catch((err) => {
@@ -179,32 +187,127 @@ export default function TodayPunches() {
       setMessage("❌ Failed to post punches.");
     }
   };
+const handleSearch = (e) => {
+  const value = e.target.value.toLowerCase();
 
-  const handleSearch = (e) => {
-    const value = e.target.value.toLowerCase();
-    if (!value) {
-      setFilteredPunches(punches);
-      return;
-    }
-    setFilteredPunches(
-      punches.filter((p) => (p.EmployeeName || "").toLowerCase().includes(value))
-    );
+  const filtered = punches.filter(
+    (p) =>
+      p.EmployeeName.toLowerCase().includes(value) ||
+      String(p.EmployeeId).includes(value)
+  );
+
+  // 🔤 keep sorted alphabetically
+  const sorted = filtered.sort((a, b) =>
+    (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
+  );
+
+  setFilteredPunches(sorted);
+};
+const handleDownloadPDF = async () => {
+  const input = document.querySelector(".attendance-table");
+
+  const canvas = await html2canvas(input, {
+    scale: 2, // Higher quality
+    useCORS: true,
+  });
+
+  const imgData = canvas.toDataURL("image/png");
+  const pdf = new jsPDF("p", "mm", "a4");
+
+  const pdfWidth = pdf.internal.pageSize.getWidth();
+  const pdfHeight = pdf.internal.pageSize.getHeight();
+
+  const imgProps = pdf.getImageProperties(imgData);
+  const imgWidth = pdfWidth;
+  const imgHeight = (imgProps.height * imgWidth) / imgProps.width;
+
+  let heightLeft = imgHeight;
+  let position = 0;
+
+  // Add first page
+  pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+  heightLeft -= pdfHeight;
+
+  while (heightLeft > 0) {
+    position -= pdfHeight;
+    pdf.addPage();
+    pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pdfHeight;
+  }
+
+  pdf.save("attendance.pdf");
+};
+
+
+const handlePrint = () => {
+  const printContent = document.querySelector(".attendance-table").outerHTML;
+  const style = `
+    <style>
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: Arial, sans-serif;
+      }
+      th, td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background-color: #f2f2f2;
+      }
+      h1 {
+        text-align: center;
+      }
+    </style>
+  `;
+
+  const win = window.open("", "PRINT", "height=650,width=900,top=100,left=150");
+  win.document.write(`
+    <html>
+      <head>
+        <title>Today's Attendance</title>
+        ${style}
+      </head>
+      <body>
+        <h1>📋 Today's Attendance Register</h1>
+        ${printContent}
+      </body>
+    </html>
+  `);
+  win.document.close();
+  win.focus();
+
+  // Wait for content to load, then print
+  win.onload = () => {
+    win.print();
+    win.close();
   };
+};
 
   if (loading) return <p className="no-data">Loading...</p>;
 
   return (
     <div className="attendance-container">
       <div className="attendance-card">
+       
         <h1>📋 Today’s Attendance Register</h1>
-
-        <div className="search-bar">
+ <div className="tds">
+          <button className="preview-btn" onClick={handlePrint}>
+  🖨️ Preview & Print
+</button>
+<button className="pdf-btn" onClick={handleDownloadPDF}>
+  📄 Download PDF
+</button>
+<div className="search-bar">
           <input
             type="text"
             placeholder="Search employee..."
             onChange={handleSearch}
           />
         </div>
+        </div>
+        
 
         <table className="attendance-table">
           <thead>
@@ -237,6 +340,7 @@ export default function TodayPunches() {
             ))}
           </tbody>
         </table>
+
 
         {/* Post button */}
         <button className="post-btn" onClick={() => setShowLogin(true)}>

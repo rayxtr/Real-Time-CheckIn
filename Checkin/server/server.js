@@ -166,6 +166,83 @@ EXEC sp_executesql @sql;
   }
 });
 
+// Get list of employees (for the employee selector)
+// Get list of employees (for the employee selector)
+app.get("/api/employees-list", async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request().query(
+      "SELECT EmployeeId, EmployeeName, NumericCode, EmployeeCodeInDevice FROM Employees ORDER BY EmployeeName;"
+    );
+    res.json(result.recordset);
+  } catch (err) {
+    console.error("Error fetching employees list:", err);
+    res.status(500).json({ error: "Failed to fetch employees" });
+  }
+});
+
+
+// Get attendance for a date range for a specific employee (date strings: 'YYYY-MM-DD')
+// Attendance range (weekly / monthly with overtime)
+app.get("/api/attendance-range", async (req, res) => {
+  try {
+    const { startDate, endDate, employeeId } = req.query;
+
+    if (!employeeId) {
+      return res.status(400).json({ error: "Employee selection is required" });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "Start and end date are required" });
+    }
+
+    // Validate: weekly request must be max 7 days
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const diffDays = (end - start) / (1000 * 60 * 60 * 24);
+    if (diffDays > 7) {
+      return res.status(400).json({ error: "Weekly range cannot exceed 7 days" });
+    }
+
+    // 👉 Adjust this table name dynamically for your current month-year
+    const tableName = "DeviceLogs_9_2025";
+
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input("employeeId", employeeId)
+      .input("startDate", startDate)
+      .input("endDate", endDate)
+      .query(`
+        SELECT 
+            e.EmployeeId,
+            e.EmployeeName,
+            CONVERT(date, d.LogDate) AS PunchDate,
+            MIN(d.LogDate) AS InTime,
+            MAX(d.LogDate) AS OutTime,
+            CASE 
+                WHEN MAX(d.LogDate) > DATEADD(hour, 18, CAST(CONVERT(date, d.LogDate) AS datetime))
+                THEN DATEDIFF(
+                    MINUTE, 
+                    DATEADD(hour, 18, CAST(CONVERT(date, d.LogDate) AS datetime)), 
+                    MAX(d.LogDate)
+                ) / 60.0
+                ELSE 0
+            END AS OvertimeHours
+        FROM ${tableName} d
+        INNER JOIN Employees e ON d.UserId = e.EmployeeCodeInDevice
+        WHERE e.EmployeeId = @employeeId
+          AND d.LogDate BETWEEN @startDate AND @endDate
+        GROUP BY e.EmployeeId, e.EmployeeName, CONVERT(date, d.LogDate)
+        ORDER BY PunchDate;
+      `);
+
+    res.json(result.recordset);
+  } catch (err) {
+    console.error("Error fetching attendance range:", err);
+    res.status(500).json({ error: "Failed to fetch attendance range" });
+  }
+});
+
+
 // ---------------- Start Server ----------------
 const PORT = 5000;
 app.listen(PORT, () => {
