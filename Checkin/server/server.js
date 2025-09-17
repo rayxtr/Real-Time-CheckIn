@@ -107,74 +107,88 @@ app.post("/api/erp-checkin", async (req, res) => {
 // ---------------- SQL Attendance API ----------------
 
 // API to fetch today's punches
+// API to fetch punches for a given date (default: today)
+// API to fetch punches for a given date (default: today)
+// API to fetch punches for a given date (default: today)
 app.get("/api/today-punches", async (req, res) => {
   try {
+    const { date } = req.query; // expected format: YYYY-MM-DD
     const pool = await poolPromise;
 
     const query = `
 DECLARE @sql NVARCHAR(MAX);
+DECLARE @targetDate DATE = ${date ? `'${date}'` : "CAST(GETDATE() AS DATE)"};
 
 SET @sql = '';
 SELECT @sql = @sql + 
-    'SELECT UserId, LogDate, DeviceId FROM ' + QUOTENAME(TABLE_NAME) + ' UNION ALL '
+    'SELECT UserId, LogDate FROM ' + QUOTENAME(TABLE_NAME) + ' UNION ALL '
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_NAME LIKE 'DeviceLogs[_]%';
 
-SET @sql = LEFT(@sql, LEN(@sql) - 10); -- remove last 'UNION ALL'
+SET @sql = LEFT(@sql, LEN(@sql) - 10);
 
 SET @sql = '
 WITH AllDeviceLogs AS (
     ' + @sql + '
 ),
-RankedLogs AS (
+DayLogs AS (
     SELECT 
         d.UserId,
-        d.LogDate,
-        ROW_NUMBER() OVER(PARTITION BY d.UserId, CAST(d.LogDate AS DATE) ORDER BY d.LogDate ASC) AS rn
+        d.LogDate
     FROM AllDeviceLogs d
-    WHERE CAST(d.LogDate AS DATE) = CAST(GETDATE() AS DATE)
+    WHERE CAST(d.LogDate AS DATE) = @targetDate
 ),
-Punches AS (
+Aggregated AS (
     SELECT 
-        e.EmployeeId,
-        e.EmployeeName,
-        e.NumericCode AS EmployeeNumericCode,
-        CAST(GETDATE() AS DATE) AS AttendanceDate,
-        MAX(CASE WHEN rn = 1 THEN CONVERT(VARCHAR(20), r.LogDate, 120) END) AS InTime,
-        MAX(CASE WHEN rn = 2 THEN CONVERT(VARCHAR(20), r.LogDate, 120) END) AS OutTime
-    FROM Employees e
-    LEFT JOIN RankedLogs r
-        ON e.EmployeeCodeInDevice = r.UserId
-    GROUP BY 
-        e.EmployeeId,
-        e.EmployeeName,
-        e.NumericCode
+        dl.UserId,
+        MIN(dl.LogDate) AS FirstPunch,
+        MAX(dl.LogDate) AS LastPunch
+    FROM DayLogs dl
+    GROUP BY dl.UserId
 )
-SELECT *
-FROM Punches
-ORDER BY EmployeeId;
+SELECT 
+    e.EmployeeId,
+    e.EmployeeName,
+    e.NumericCode AS EmployeeNumericCode,
+    @targetDate AS AttendanceDate,
+    CONVERT(VARCHAR(20), a.FirstPunch, 120) AS InTime,
+    CASE 
+        WHEN a.FirstPunch <> a.LastPunch 
+        THEN CONVERT(VARCHAR(20), a.LastPunch, 120) 
+        ELSE NULL 
+    END AS OutTime
+FROM Employees e
+LEFT JOIN Aggregated a
+    ON e.EmployeeCodeInDevice = a.UserId
+ORDER BY e.EmployeeId;
 ';
 
-EXEC sp_executesql @sql;
+EXEC sp_executesql @sql, N'@targetDate DATE', @targetDate=@targetDate;
 `;
 
     const result = await pool.request().query(query);
     res.json(result.recordset);
   } catch (err) {
-    console.error("Error fetching today's punches:", err);
+    console.error("Error fetching punches:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
+
 // Get list of employees (for the employee selector)
 // Get list of employees (for the employee selector)
+// server.js
 app.get("/api/employees-list", async (req, res) => {
   try {
     const pool = await poolPromise;
-    const result = await pool.request().query(
-      "SELECT EmployeeId, EmployeeName, NumericCode, EmployeeCodeInDevice FROM Employees ORDER BY EmployeeName;"
-    );
-    res.json(result.recordset);
+
+    const result = await pool.request().query(`
+      SELECT EmployeeId, EmployeeName, NumericCode, EmployeeCodeInDevice
+      FROM Employees
+      ORDER BY EmployeeName
+    `);
+        
+    res.json(result.recordset); // return as array
   } catch (err) {
     console.error("Error fetching employees list:", err);
     res.status(500).json({ error: "Failed to fetch employees" });
@@ -182,8 +196,10 @@ app.get("/api/employees-list", async (req, res) => {
 });
 
 
+
 // Get attendance for a date range for a specific employee (date strings: 'YYYY-MM-DD')
 // Attendance range (weekly / monthly with overtime)
+// Get attendance for a date range for a specific employee (weekly / monthly with overtime)
 app.get("/api/attendance-range", async (req, res) => {
   try {
     const { startDate, endDate, employeeId } = req.query;
@@ -195,46 +211,101 @@ app.get("/api/attendance-range", async (req, res) => {
       return res.status(400).json({ error: "Start and end date are required" });
     }
 
-    // Validate: weekly request must be max 7 days
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const diffDays = (end - start) / (1000 * 60 * 60 * 24);
-    if (diffDays > 7) {
-      return res.status(400).json({ error: "Weekly range cannot exceed 7 days" });
+    const pool = await poolPromise;
+
+    // Build dynamic SQL for union of all DeviceLogs tables
+    let unionSql = '';
+    const tables = await pool.request().query(`
+      SELECT TABLE_NAME
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_NAME LIKE 'DeviceLogs[_]%'
+    `);
+
+    tables.recordset.forEach((tbl) => {
+      unionSql += `SELECT d.UserId, d.LogDate FROM [${tbl.TABLE_NAME}] d 
+                  WHERE d.LogDate >= '${startDate}' AND d.LogDate < DATEADD(DAY, 1, '${endDate}')
+ 
+                   UNION ALL\n`;
+    });
+
+    // Remove last UNION ALL
+    unionSql = unionSql.trim();
+    if (unionSql.endsWith('UNION ALL')) {
+      unionSql = unionSql.slice(0, -9);
     }
 
-    // 👉 Adjust this table name dynamically for your current month-year
-    const tableName = "DeviceLogs_9_2025";
+    const query = `
+WITH AllDeviceLogs AS (
+  ${unionSql}
+),
+DateRange AS (
+  SELECT CAST('${startDate}' AS DATE) AS PunchDate
+  UNION ALL
+  SELECT DATEADD(DAY, 1, PunchDate) 
+  FROM DateRange 
+  WHERE PunchDate < CAST('${endDate}' AS DATE)
+    AND DATEADD(DAY, 1, PunchDate) <= CAST(GETDATE() AS DATE)
+),
+DayLogs AS (
+  SELECT 
+    d.UserId,
+    CAST(d.LogDate AS DATE) AS PunchDate,
+    d.LogDate
+  FROM AllDeviceLogs d
+  WHERE d.UserId = (SELECT EmployeeCodeInDevice FROM Employees WHERE EmployeeId = ${employeeId})
+),
+Aggregated AS (
+  SELECT 
+    dr.PunchDate,
+    MIN(dl.LogDate) AS InTime,
+    MAX(dl.LogDate) AS OutTime
+  FROM DateRange dr
+  LEFT JOIN DayLogs dl ON dl.PunchDate = dr.PunchDate
+  GROUP BY dr.PunchDate
+)
+SELECT 
+  e.EmployeeId,
+  e.EmployeeName,
+  CONVERT(VARCHAR(10), a.PunchDate, 120) AS PunchDate,
+  
+  -- InTime logic
+  CASE 
+    WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.InTime IS NULL THEN 'Holiday'
+    WHEN a.InTime IS NULL THEN 'Leave / Absent'
+    ELSE CONVERT(VARCHAR(5), a.InTime, 108)
+  END AS InTime,
+  
+  -- OutTime logic
+  CASE 
+    WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.OutTime IS NULL THEN 'Holiday'
+    WHEN a.OutTime IS NULL THEN CASE WHEN a.InTime IS NULL THEN 'Leave / Absent' ELSE NULL END
+    ELSE CONVERT(VARCHAR(5), a.OutTime, 108)
+  END AS OutTime,
+  
+  -- Overtime calculation
+  CASE
+    -- Friday punch: double total hours
+    WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.InTime IS NOT NULL AND a.OutTime IS NOT NULL THEN
+        CAST((DATEDIFF(MINUTE, a.InTime, a.OutTime) * 2) / 60 AS VARCHAR) + ' hour ' +
+        CAST((DATEDIFF(MINUTE, a.InTime, a.OutTime) * 2) % 60 AS VARCHAR) + ' minutes'
+    
+    -- Normal overtime after 18:00
+    WHEN a.OutTime > DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)) THEN
+        CAST(DATEDIFF(MINUTE, DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)), a.OutTime)/60 AS VARCHAR) + ' hour ' +
+        CAST(DATEDIFF(MINUTE, DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)), a.OutTime) % 60 AS VARCHAR) + ' minutes'
+    
+    ELSE '0 minutes'
+  END AS OvertimeHours
 
-    const pool = await poolPromise;
-    const result = await pool.request()
-      .input("employeeId", employeeId)
-      .input("startDate", startDate)
-      .input("endDate", endDate)
-      .query(`
-        SELECT 
-            e.EmployeeId,
-            e.EmployeeName,
-            CONVERT(date, d.LogDate) AS PunchDate,
-            MIN(d.LogDate) AS InTime,
-            MAX(d.LogDate) AS OutTime,
-            CASE 
-                WHEN MAX(d.LogDate) > DATEADD(hour, 18, CAST(CONVERT(date, d.LogDate) AS datetime))
-                THEN DATEDIFF(
-                    MINUTE, 
-                    DATEADD(hour, 18, CAST(CONVERT(date, d.LogDate) AS datetime)), 
-                    MAX(d.LogDate)
-                ) / 60.0
-                ELSE 0
-            END AS OvertimeHours
-        FROM ${tableName} d
-        INNER JOIN Employees e ON d.UserId = e.EmployeeCodeInDevice
-        WHERE e.EmployeeId = @employeeId
-          AND d.LogDate BETWEEN @startDate AND @endDate
-        GROUP BY e.EmployeeId, e.EmployeeName, CONVERT(date, d.LogDate)
-        ORDER BY PunchDate;
-      `);
+FROM Aggregated a
+INNER JOIN Employees e ON e.EmployeeId = ${employeeId}
+ORDER BY a.PunchDate
+OPTION (MAXRECURSION 0);
 
+`;
+
+
+    const result = await pool.request().query(query);
     res.json(result.recordset);
   } catch (err) {
     console.error("Error fetching attendance range:", err);

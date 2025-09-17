@@ -1,11 +1,13 @@
-import React from "react";
+import { Routes, Route } from "react-router-dom";
 import TodayPunches from "./TodayPunches";
+import AttendanceDashboard from "./AttendanceDashboard";
 
 function App() {
   return (
-    <div className="App">
-      <TodayPunches />
-    </div>
+    <Routes>
+      <Route path="/" element={<TodayPunches />} />
+       <Route path="/attendance-dashboard" element={<AttendanceDashboard />} />
+    </Routes>
   );
 }
 

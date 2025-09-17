@@ -2,10 +2,12 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import { useNavigate } from "react-router-dom";
 
 import "./TodayPunches.css";
 
 export default function TodayPunches() {
+   const navigate = useNavigate();
   const [punches, setPunches] = useState([]);
   const [filteredPunches, setFilteredPunches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13,37 +15,37 @@ export default function TodayPunches() {
   const [password, setPassword] = useState("");
   const [showLogin, setShowLogin] = useState(false);
   const [message, setMessage] = useState("");
+  const [selectedDate, setSelectedDate] = useState(
+    new Date().toISOString().split("T")[0] // default: today (YYYY-MM-DD)
+  );
 
-useEffect(() => {
-  const fetchPunches = () => {
-    fetch("http://localhost:5000/api/today-punches")
-      .then((res) => res.json())
-      .then((data) => {
-        // 🚫 filter out EmployeeId 1 and 2
-        const filtered = (data || []).filter(
-          (p) => String(p.EmployeeId) !== "1" && String(p.EmployeeId) !== "2"
-        );
+  useEffect(() => {
+    const fetchPunches = () => {
+      fetch(`http://localhost:5000/api/today-punches?date=${selectedDate}`)
+        .then((res) => res.json())
+        .then((data) => {
+          const filtered = (data || []).filter(
+            (p) => String(p.EmployeeId) !== "1" && String(p.EmployeeId) !== "2"
+          );
 
-        // 🔤 sort alphabetically by EmployeeName
-        const sorted = filtered.sort((a, b) =>
-          (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
-        );
+          const sorted = filtered.sort((a, b) =>
+            (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
+          );
 
-        setPunches(sorted);
-        setFilteredPunches(sorted);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("Error fetching punches:", err);
-        setLoading(false);
-      });
-  };
+          setPunches(sorted);
+          setFilteredPunches(sorted);
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error("Error fetching punches:", err);
+          setLoading(false);
+        });
+    };
 
-  fetchPunches();
-  const interval = setInterval(fetchPunches, 5000);
-  return () => clearInterval(interval);
-}, []);
-
+    fetchPunches();
+    const interval = setInterval(fetchPunches, 5000);
+    return () => clearInterval(interval);
+  }, [selectedDate]); // 🔑 refetch whenever date changes
 
   const formatDate = (dateStr) => {
     if (!dateStr) return "-";
@@ -60,35 +62,32 @@ useEffect(() => {
     const d = new Date(dateStr);
     return d.toLocaleTimeString("en-GB", { hour12: false });
   };
-  const formatForERP = (dateStr) => {
-  const d = new Date(dateStr);
-  // Format as "YYYY-MM-DD HH:mm:ss" in local time
-  return (
-    d.getFullYear() +
-    "-" +
-    String(d.getMonth() + 1).padStart(2, "0") +
-    "-" +
-    String(d.getDate()).padStart(2, "0") +
-    " " +
-    String(d.getHours()).padStart(2, "0") +
-    ":" +
-    String(d.getMinutes()).padStart(2, "0") +
-    ":" +
-    String(d.getSeconds()).padStart(2, "0")
-  );
-};
 
+  const formatForERP = (dateStr) => {
+    const d = new Date(dateStr);
+    return (
+      d.getFullYear() +
+      "-" +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(d.getDate()).padStart(2, "0") +
+      " " +
+      String(d.getHours()).padStart(2, "0") +
+      ":" +
+      String(d.getMinutes()).padStart(2, "0") +
+      ":" +
+      String(d.getSeconds()).padStart(2, "0")
+    );
+  };
 
   const handlePostToERP = async () => {
     try {
       setMessage("⏳ Logging in and posting...");
-      // Step 1: Login
       const loginRes = await axios.post("http://localhost:5000/api/login-erp", {
         username,
         password,
       });
 
-      // Frappe get_keys often returns { message: { api_key, api_secret } }
       const loginMsg = loginRes.data?.message || loginRes.data || {};
       const { api_key, api_secret } = loginMsg;
 
@@ -98,24 +97,19 @@ useEffect(() => {
       }
       const token = `token ${api_key}:${api_secret}`;
 
-      // Step 2: Get full employee details from server (server returns { data: [...] })
       const empRes = await axios.post("http://localhost:5000/api/erp-employees", {
         token,
       });
       const employeeData = empRes.data?.data || [];
 
-      // Step 3: Get location
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
           const latitude = pos.coords.latitude;
           const longitude = pos.coords.longitude;
 
-          // Step 4: Loop punches and post matched employee's IN/OUT
           for (const punch of punches) {
-            // Try to match by user_id (preferred), and fallback to a few common fields
             const matched = employeeData.find((emp) => {
               if (!emp) return false;
-              // common fields where device id might exist
               const possibleIds = [
                 emp.user_id,
                 emp.user,
@@ -123,10 +117,12 @@ useEffect(() => {
                 emp.EmployeeCodeInDevice,
                 emp.employee_code_in_device,
                 emp.numeric_code,
-                emp.name, // the Employee docname
+                emp.name,
               ].filter(Boolean);
 
-              return possibleIds.some((id) => String(id) === String(punch.EmployeeId));
+              return possibleIds.some(
+                (id) => String(id) === String(punch.EmployeeId)
+              );
             });
 
             if (!matched) {
@@ -134,10 +130,8 @@ useEffect(() => {
               continue;
             }
 
-            // Post IN if available
             if (punch.InTime) {
               const inData = {
-                // ERP likely expects the employee docname here (e.g. "NL-EMP-055")
                 employee: matched.name,
                 log_type: "IN",
                 time: formatForERP(punch.InTime),
@@ -150,11 +144,14 @@ useEffect(() => {
                   data: inData,
                 });
               } catch (err) {
-                console.error("Failed to post IN for", matched.name, err.response?.data || err.message);
+                console.error(
+                  "Failed to post IN for",
+                  matched.name,
+                  err.response?.data || err.message
+                );
               }
             }
 
-            // Post OUT only if IN was already posted
             if (punch.OutTime && punch.InTime) {
               const outData = {
                 employee: matched.name,
@@ -169,7 +166,11 @@ useEffect(() => {
                   data: outData,
                 });
               } catch (err) {
-                console.error("Failed to post OUT for", matched.name, err.response?.data || err.message);
+                console.error(
+                  "Failed to post OUT for",
+                  matched.name,
+                  err.response?.data || err.message
+                );
               }
             }
           }
@@ -187,127 +188,137 @@ useEffect(() => {
       setMessage("❌ Failed to post punches.");
     }
   };
-const handleSearch = (e) => {
-  const value = e.target.value.toLowerCase();
 
-  const filtered = punches.filter(
-    (p) =>
-      p.EmployeeName.toLowerCase().includes(value) ||
-      String(p.EmployeeId).includes(value)
-  );
+  const handleSearch = (e) => {
+    const value = e.target.value.toLowerCase();
 
-  // 🔤 keep sorted alphabetically
-  const sorted = filtered.sort((a, b) =>
-    (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
-  );
+    const filtered = punches.filter(
+      (p) =>
+        p.EmployeeName.toLowerCase().includes(value) ||
+        String(p.EmployeeId).includes(value)
+    );
 
-  setFilteredPunches(sorted);
-};
-const handleDownloadPDF = async () => {
-  const input = document.querySelector(".attendance-table");
+    const sorted = filtered.sort((a, b) =>
+      (a.EmployeeName || "").localeCompare(b.EmployeeName || "")
+    );
 
-  const canvas = await html2canvas(input, {
-    scale: 2, // Higher quality
-    useCORS: true,
-  });
+    setFilteredPunches(sorted);
+  };
 
-  const imgData = canvas.toDataURL("image/png");
-  const pdf = new jsPDF("p", "mm", "a4");
+  const handleDownloadPDF = async () => {
+    const input = document.querySelector(".attendance-table");
 
-  const pdfWidth = pdf.internal.pageSize.getWidth();
-  const pdfHeight = pdf.internal.pageSize.getHeight();
+    const canvas = await html2canvas(input, {
+      scale: 2,
+      useCORS: true,
+    });
 
-  const imgProps = pdf.getImageProperties(imgData);
-  const imgWidth = pdfWidth;
-  const imgHeight = (imgProps.height * imgWidth) / imgProps.width;
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("p", "mm", "a4");
 
-  let heightLeft = imgHeight;
-  let position = 0;
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
 
-  // Add first page
-  pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-  heightLeft -= pdfHeight;
+    const imgProps = pdf.getImageProperties(imgData);
+    const imgWidth = pdfWidth;
+    const imgHeight = (imgProps.height * imgWidth) / imgProps.width;
 
-  while (heightLeft > 0) {
-    position -= pdfHeight;
-    pdf.addPage();
+    let heightLeft = imgHeight;
+    let position = 0;
+
     pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
     heightLeft -= pdfHeight;
-  }
 
-  pdf.save("attendance.pdf");
-};
+    while (heightLeft > 0) {
+      position -= pdfHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pdfHeight;
+    }
 
-
-const handlePrint = () => {
-  const printContent = document.querySelector(".attendance-table").outerHTML;
-  const style = `
-    <style>
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: Arial, sans-serif;
-      }
-      th, td {
-        border: 1px solid #ccc;
-        padding: 8px;
-        text-align: left;
-      }
-      th {
-        background-color: #f2f2f2;
-      }
-      h1 {
-        text-align: center;
-      }
-    </style>
-  `;
-
-  const win = window.open("", "PRINT", "height=650,width=900,top=100,left=150");
-  win.document.write(`
-    <html>
-      <head>
-        <title>Today's Attendance</title>
-        ${style}
-      </head>
-      <body>
-        <h1>📋 Today's Attendance Register</h1>
-        ${printContent}
-      </body>
-    </html>
-  `);
-  win.document.close();
-  win.focus();
-
-  // Wait for content to load, then print
-  win.onload = () => {
-    win.print();
-    win.close();
+    pdf.save(`${selectedDate}_attendance_report.pdf`);
   };
-};
+
+  const handlePrint = () => {
+    const printContent = document.querySelector(".attendance-table").outerHTML;
+    const style = `
+      <style>
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          font-family: Arial, sans-serif;
+        }
+        th, td {
+          border: 1px solid #ccc;
+          padding: 8px;
+          text-align: left;
+        }
+        th {
+          background-color: #f2f2f2;
+        }
+        h1 {
+          text-align: center;
+        }
+      </style>
+    `;
+
+    const win = window.open("", "PRINT", "height=650,width=900,top=100,left=150");
+    win.document.write(`
+      <html>
+        <head>
+          <title>Today's Attendance</title>
+          ${style}
+        </head>
+        <body>
+          <h1>📋 Attendance Register (${selectedDate})</h1>
+          ${printContent}
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+
+    win.onload = () => {
+      win.print();
+      win.close();
+    };
+  };
 
   if (loading) return <p className="no-data">Loading...</p>;
 
   return (
+    
     <div className="attendance-container">
       <div className="attendance-card">
-       
-        <h1>📋 Today’s Attendance Register</h1>
- <div className="tds">
-          <button className="preview-btn" onClick={handlePrint}>
-  🖨️ Preview & Print
-</button>
-<button className="pdf-btn" onClick={handleDownloadPDF}>
-  📄 Download PDF
-</button>
-<div className="search-bar">
+        <h1>📋 Attendance Register</h1>
+  <button
+          onClick={() => navigate("/attendance-dashboard")}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+        >
+          Attendance Dashboard
+        </button>
+        <div className="tds">
+          {/* 🔽 New date filter */}
           <input
-            type="text"
-            placeholder="Search employee..."
-            onChange={handleSearch}
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
           />
+
+          <button className="preview-btn" onClick={handlePrint}>
+            🖨️ Preview & Print
+          </button>
+          <button className="pdf-btn" onClick={handleDownloadPDF}>
+            📄 Download PDF
+          </button>
+          <div className="search-bar">
+            <input
+              type="text"
+              placeholder="Search employee..."
+              onChange={handleSearch}
+            />
+          </div>
         </div>
-        </div>
-        
 
         <table className="attendance-table">
           <thead>
@@ -324,7 +335,7 @@ const handlePrint = () => {
             {filteredPunches.length === 0 && (
               <tr>
                 <td colSpan={6} className="no-data">
-                  No punches recorded today
+                  No punches recorded
                 </td>
               </tr>
             )}
@@ -341,13 +352,10 @@ const handlePrint = () => {
           </tbody>
         </table>
 
-
-        {/* Post button */}
         <button className="post-btn" onClick={() => setShowLogin(true)}>
           🚀 Post to ERP
         </button>
 
-        {/* Login modal */}
         {showLogin && (
           <div className="login-modal">
             <h3>🔐 ERP Login</h3>
