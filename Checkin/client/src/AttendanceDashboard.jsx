@@ -98,24 +98,42 @@ export default function AttendanceDashboard() {
   }, [selectedEmployee, tab, month, weekStart, weekEnd]);
 
   // Generate PDF
-  const generatePDF = () => {
-  if (!attendance || attendance.length === 0) return;
+ const generatePDF = () => {
+  if (!attendance || attendance.length === 0) {
+    alert("No attendance data to export.");
+    return;
+  }
 
   const doc = new jsPDF();
   const title = `Attendance Report (${tab === "monthly" ? "Monthly" : "Weekly"})`;
   doc.setFontSize(14);
   doc.text(title, 14, 15);
 
-  const emp = employees.find((e) => e.EmployeeId === selectedEmployee);
-  const empName = emp ? emp.EmployeeName.replace(/\s+/g, "_") : "Employee";
+  // ✅ Find employee by selectedEmployee
+  const emp = employees.find(
+    (e) => String(e.EmployeeId) === String(selectedEmployee)
+  );
 
-  const subtitle = `Employee: ${emp ? emp.EmployeeName : ""} | ${
+  // ✅ Employee name with fallback to ID → Employee
+  const empName =
+    emp.EmployeeName;
+
+  const subtitle = `Employee: ${
+    emp?.EmployeeName || emp?.EmployeeId || "Unknown"
+  } | ${
     tab === "monthly" ? `Month: ${month}` : `From: ${weekStart} To: ${weekEnd}`
   }`;
   doc.setFontSize(11);
   doc.text(subtitle, 14, 22);
 
-  const tableColumn = ["Employee Name", "Punch Date", "In Time", "Out Time", "Overtime Hours"];
+  const tableColumn = [
+    "Employee Name",
+    "Punch Date",
+    "In Time",
+    "Out Time",
+    "Overtime Hours",
+  ];
+
   const tableRows = attendance.map((att) => [
     att.EmployeeName,
     att.PunchDate,
@@ -133,19 +151,22 @@ export default function AttendanceDashboard() {
     styles: { fontSize: 10 },
     headStyles: { fillColor: [22, 160, 133] },
     didParseCell: function (data) {
-      if (data.row.section === "body" && data.row.cells[1].raw === todayStr) {
+      if (
+        data.row.section === "body" &&
+        data.row.cells[1].raw === todayStr
+      ) {
         data.cell.styles.fillColor = [255, 235, 205]; // light orange
         data.cell.styles.fontStyle = "bold";
       }
     },
   });
 
-  // ✅ Filename based on monthly or weekly selection
+  // ✅ Filename with empName fallback logic
   let filename = "";
   if (tab === "monthly") {
     filename = `${empName}_${month}_attendance.pdf`;
   } else {
-    filename = `${empName}_${weekStart}-to-${weekEnd}_attendance.pdf`;
+    filename = `${empName}_${weekStart}_to_${weekEnd}_attendance.pdf`;
   }
 
   doc.save(filename);

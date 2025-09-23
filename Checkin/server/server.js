@@ -2,13 +2,26 @@ const express = require("express");
 const cors = require("cors");
 const { poolPromise } = require("./db");
 const axios = require("axios");
+const path = require("path");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check
-app.get("/", (req, res) => {
+// ---------------- Serve React Frontend ----------------
+app.use(express.static(path.join(__dirname, "../client/dist")));
+// ✅ Express 5 compatible
+app.use((req, res, next) => {
+  if (req.method === "GET" && !req.path.startsWith("/api")) {
+    res.sendFile(path.join(__dirname, "../client/dist/index.html"));
+  } else {
+    next();
+  }
+});
+
+
+// ---------------- Health check ----------------
+app.get("/health", (req, res) => {
   res.send("Server is running");
 });
 
@@ -31,13 +44,10 @@ app.post("/api/login-erp", async (req, res) => {
 
 /**
  * Fetch all ERP employees (detailed)
- * - Expects { token } in body
- * - Returns: { data: [ { ...employee details... }, ... ] }
  */
 app.post("/api/erp-employees", async (req, res) => {
   const { token } = req.body;
   try {
-    // 1) get the list (this returns minimal rows with "name" usually)
     const listRes = await axios.get(
       "https://firstgulf.accu360.cloud/api/resource/Employee?limit_page_length=1000",
       {
@@ -50,15 +60,16 @@ app.post("/api/erp-employees", async (req, res) => {
 
     const list = listRes.data?.data || [];
 
-    // 2) fetch details for each employee by name
     const detailPromises = list.map(async (item) => {
-      // item might be a string or an object with .name
-      const empName = typeof item === "string" ? item : item?.name || item?.employee || null;
+      const empName =
+        typeof item === "string" ? item : item?.name || item?.employee || null;
       if (!empName) return null;
 
       try {
         const detailRes = await axios.get(
-          `https://firstgulf.accu360.cloud/api/resource/Employee/${encodeURIComponent(empName)}`,
+          `https://firstgulf.accu360.cloud/api/resource/Employee/${encodeURIComponent(
+            empName
+          )}`,
           {
             headers: {
               Authorization: token,
@@ -66,11 +77,13 @@ app.post("/api/erp-employees", async (req, res) => {
             },
           }
         );
-        // Frappe returns the detailed record in detailRes.data.data
         return detailRes.data?.data || null;
       } catch (err) {
-        console.error(`Failed to fetch Employee detail for ${empName}:`, err.response?.data || err.message);
-        return null; // continue with others
+        console.error(
+          `Failed to fetch Employee detail for ${empName}:`,
+          err.response?.data || err.message
+        );
+        return null;
       }
     });
 
@@ -78,7 +91,10 @@ app.post("/api/erp-employees", async (req, res) => {
 
     res.json({ data: detailed });
   } catch (error) {
-    console.error("ERP employee fetch error:", error.response?.data || error.message);
+    console.error(
+      "ERP employee fetch error:",
+      error.response?.data || error.message
+    );
     res.status(500).json({ error: "Failed to fetch employees" });
   }
 });
@@ -106,13 +122,9 @@ app.post("/api/erp-checkin", async (req, res) => {
 
 // ---------------- SQL Attendance API ----------------
 
-// API to fetch today's punches
-// API to fetch punches for a given date (default: today)
-// API to fetch punches for a given date (default: today)
-// API to fetch punches for a given date (default: today)
 app.get("/api/today-punches", async (req, res) => {
   try {
-    const { date } = req.query; // expected format: YYYY-MM-DD
+    const { date } = req.query;
     const pool = await poolPromise;
 
     const query = `
@@ -174,10 +186,6 @@ EXEC sp_executesql @sql, N'@targetDate DATE', @targetDate=@targetDate;
   }
 });
 
-
-// Get list of employees (for the employee selector)
-// Get list of employees (for the employee selector)
-// server.js
 app.get("/api/employees-list", async (req, res) => {
   try {
     const pool = await poolPromise;
@@ -187,19 +195,14 @@ app.get("/api/employees-list", async (req, res) => {
       FROM Employees
       ORDER BY EmployeeName
     `);
-        
-    res.json(result.recordset); // return as array
+
+    res.json(result.recordset);
   } catch (err) {
     console.error("Error fetching employees list:", err);
     res.status(500).json({ error: "Failed to fetch employees" });
   }
 });
 
-
-
-// Get attendance for a date range for a specific employee (date strings: 'YYYY-MM-DD')
-// Attendance range (weekly / monthly with overtime)
-// Get attendance for a date range for a specific employee (weekly / monthly with overtime)
 app.get("/api/attendance-range", async (req, res) => {
   try {
     const { startDate, endDate, employeeId } = req.query;
@@ -213,8 +216,7 @@ app.get("/api/attendance-range", async (req, res) => {
 
     const pool = await poolPromise;
 
-    // Build dynamic SQL for union of all DeviceLogs tables
-    let unionSql = '';
+    let unionSql = "";
     const tables = await pool.request().query(`
       SELECT TABLE_NAME
       FROM INFORMATION_SCHEMA.TABLES
@@ -228,9 +230,8 @@ app.get("/api/attendance-range", async (req, res) => {
                    UNION ALL\n`;
     });
 
-    // Remove last UNION ALL
     unionSql = unionSql.trim();
-    if (unionSql.endsWith('UNION ALL')) {
+    if (unionSql.endsWith("UNION ALL")) {
       unionSql = unionSql.slice(0, -9);
     }
 
@@ -267,43 +268,30 @@ SELECT
   e.EmployeeId,
   e.EmployeeName,
   CONVERT(VARCHAR(10), a.PunchDate, 120) AS PunchDate,
-  
-  -- InTime logic
   CASE 
     WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.InTime IS NULL THEN 'Holiday'
     WHEN a.InTime IS NULL THEN 'Leave / Absent'
     ELSE CONVERT(VARCHAR(5), a.InTime, 108)
   END AS InTime,
-  
-  -- OutTime logic
   CASE 
     WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.OutTime IS NULL THEN 'Holiday'
     WHEN a.OutTime IS NULL THEN CASE WHEN a.InTime IS NULL THEN 'Leave / Absent' ELSE NULL END
     ELSE CONVERT(VARCHAR(5), a.OutTime, 108)
   END AS OutTime,
-  
-  -- Overtime calculation
   CASE
-    -- Friday punch: double total hours
     WHEN DATENAME(WEEKDAY, a.PunchDate) = 'Friday' AND a.InTime IS NOT NULL AND a.OutTime IS NOT NULL THEN
         CAST((DATEDIFF(MINUTE, a.InTime, a.OutTime) * 2) / 60 AS VARCHAR) + ' hour ' +
         CAST((DATEDIFF(MINUTE, a.InTime, a.OutTime) * 2) % 60 AS VARCHAR) + ' minutes'
-    
-    -- Normal overtime after 18:00
     WHEN a.OutTime > DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)) THEN
         CAST(DATEDIFF(MINUTE, DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)), a.OutTime)/60 AS VARCHAR) + ' hour ' +
         CAST(DATEDIFF(MINUTE, DATEADD(hour, 18, CAST(a.PunchDate AS DATETIME)), a.OutTime) % 60 AS VARCHAR) + ' minutes'
-    
     ELSE '0 minutes'
   END AS OvertimeHours
-
 FROM Aggregated a
 INNER JOIN Employees e ON e.EmployeeId = ${employeeId}
 ORDER BY a.PunchDate
 OPTION (MAXRECURSION 0);
-
 `;
-
 
     const result = await pool.request().query(query);
     res.json(result.recordset);
@@ -312,7 +300,6 @@ OPTION (MAXRECURSION 0);
     res.status(500).json({ error: "Failed to fetch attendance range" });
   }
 });
-
 
 // ---------------- Start Server ----------------
 const PORT = 5000;
